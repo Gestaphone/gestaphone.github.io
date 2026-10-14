@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shaqaale Pro — Admin</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:#0A0F1E;color:#E5E7EB;font-size:14px}
+#app{display:flex;min-height:100vh}
+nav{width:210px;background:#111827;border-right:1px solid #1F2937;padding:16px 10px;position:sticky;top:0;height:100vh;overflow:auto;flex-shrink:0}
+nav h1{font-size:16px;margin:0 8px 14px}nav a{display:block;padding:9px 12px;border-radius:8px;color:#9CA3AF;cursor:pointer;margin-bottom:2px}
+nav a:hover{background:#1F2937}nav a.on{background:#2563EB;color:#fff}
+main{flex:1;padding:22px;min-width:0}
+.card{background:#111827;border:1px solid #1F2937;border-radius:12px;padding:16px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:#0F172A;border-radius:10px;padding:14px}.stat b{display:block;font-size:22px;color:#60A5FA}.stat span{font-size:12px;color:#9CA3AF}
+input,select,button,textarea{font:inherit;padding:7px 11px;border-radius:8px;border:1px solid #374151;background:#0F172A;color:#E5E7EB}
+button{cursor:pointer;background:#2563EB;border-color:#2563EB;color:#fff}button.sec{background:#1F2937;border-color:#374151}button.red{background:#B91C1C;border-color:#B91C1C}button.sm{padding:3px 9px;font-size:12px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #1F2937;vertical-align:top}th{color:#9CA3AF;font-weight:600;font-size:12px}
+.wrap{overflow-x:auto}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.muted{color:#9CA3AF;font-size:13px}.err{color:#F87171}.ok{color:#34D399}
+.tag{padding:2px 8px;border-radius:99px;font-size:11px;background:#1F2937}.tag.bad{background:#7F1D1D}.tag.good{background:#064E3B}.tag.warn{background:#78350F}
+.bars{display:flex;align-items:flex-end;gap:6px;height:110px}.bars div{flex:1;background:#2563EB;border-radius:4px 4px 0 0;min-height:2px;position:relative}
+.bars div span{position:absolute;bottom:-18px;left:0;right:0;text-align:center;font-size:10px;color:#9CA3AF}
+.modal{position:fixed;inset:0;background:#000A;display:flex;align-items:center;justify-content:center;z-index:9}.modal .card{width:min(520px,92vw);max-height:88vh;overflow:auto;margin:0}
+.modal label{display:block;margin:8px 0 3px;color:#9CA3AF;font-size:12px}.modal input,.modal select{width:100%}
+.bubble{padding:7px 11px;border-radius:12px;margin:5px 0;max-width:80%;background:#1F2937}.bubble.worker{background:#1E3A8A;margin-left:auto}
+#login{max-width:340px;margin:12vh auto}#login input{width:100%;margin-bottom:10px}
+@media(max-width:760px){#app{flex-direction:column}nav{width:100%;height:auto;position:static;display:flex;flex-wrap:wrap;gap:4px}nav h1{width:100%}}
+</style>
+</head>
+<body>
+<div id="login" class="card" style="display:none">
+  <h1 style="margin-top:0">Admin login</h1>
+  <input id="u" placeholder="Email" autocomplete="username">
+  <input id="p" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="go" style="width:100%">Sign in</button>
+  <p id="lerr" class="err"></p>
+</div>
+<div id="app" style="display:none">
+  <nav id="nav"></nav>
+  <main><div id="view"></div></main>
+</div>
+<div id="modal"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem('adm'), page = 'dashboard';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => '$' + (Math.round(Number(n || 0) * 100) / 100).toLocaleString();
+const tag = (t, cls) => `<span class="tag ${cls || ''}">${esc(t)}</span>`;
+const stCls = (s) => ({ completed: 'good', confirmed: 'warn', cancelled: 'bad', DELIVERED: 'good', FAILED: 'bad', CANCELLED: 'bad' }[s] || '');
+
+async function api(method, path, body) {
+  const r = await fetch('/api/admin' + path, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== '/login') { showLogin(); throw new Error('Session expired'); }
+  if (!r.ok) throw new Error(j.error || 'Error ' + r.status);
+  return j;
+}
+const act = async (fn, after) => { try { await fn(); if (after) await after(); } catch (e) { if (e.message !== 'Session expired') alert(e.message); } };
+
+function showLogin() { token = null; sessionStorage.removeItem('adm'); $('app').style.display = 'none'; $('login').style.display = 'block'; }
+function showApp() { $('login').style.display = 'none'; $('app').style.display = 'flex'; go(page); }
+$('go').onclick = async () => {
+  try { token = (await api('POST', '/login', { username: $('u').value, password: $('p').value })).token; sessionStorage.setItem('adm', token); $('lerr').textContent = ''; showApp(); }
+  catch (e) { $('lerr').textContent = e.message; }
+};
+$('p').onkeydown = (e) => { if (e.key === 'Enter') $('go').click(); };
+
+const PAGES = [['dashboard', 'Dashboard'], ['users', 'Users'], ['workers', 'Workers'], ['verifications', 'Verification'], ['bookings', 'Bookings'], ['payments', 'Payments'], ['methods', 'Payment methods'], ['commissions', 'Commissions'], ['providers', 'Providers (OTP/Email/WhatsApp)'], ['notifications', 'Notification log'], ['messages', 'Messages'],
+  ['deliveries', 'Deliveries'], ['ratings', 'Ratings'], ['app', 'App settings'], ['settings', 'Settings'], ['backup', 'Backup & Export'], ['audit', 'Audit log']];
+function go(p) {
+  page = p;
+  $('nav').innerHTML = '<h1>Shaqaale Pro</h1>' + PAGES.map(([k, l]) => `<a data-p="${k}" class="${k === p ? 'on' : ''}">${l}</a>`).join('') + '<a data-p="logout" style="margin-top:14px">Log out</a>';
+  $('nav').querySelectorAll('a').forEach((a) => a.onclick = async () => {
+    if (a.dataset.p === 'logout') { try { await api('POST', '/logout'); } catch (_) {} return showLogin(); }
+    go(a.dataset.p);
+  });
+  $('view').innerHTML = '<p class="muted">Loading…</p>';
+  act(() => VIEWS[p]());
+}
+const table = (cols, rows) => rows.length
+  ? `<div class="wrap"><table><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>${rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table></div>`
+  : '<p class="muted">No records.</p>';
+const reload = () => go(page);
+
+function modal(html, onSave) {
+  $('modal').innerHTML = `<div class="modal"><div class="card">${html}<div class="row" style="margin:14px 0 0"><button id="m-ok">Save</button><button class="sec" id="m-x">Close</button></div></div></div>`;
+  $('m-x').onclick = () => $('modal').innerHTML = '';
+  $('m-ok').onclick = () => act(onSave, () => { $('modal').innerHTML = ''; reload(); });
+  if (!onSave) $('m-ok').style.display = 'none';
+}
+
+const VIEWS = {
+  async dashboard() {
+    const s = await api('GET', '/stats');
+    const max = Math.max(1, ...s.daily.map((d) => d.c));
+    const cards = [['Customers', s.customers], ['Worker accounts', s.workers], ['Catalogue workers', s.catalogueWorkers], ['Bookings', s.bookings], ['Active', s.active],
+      ['Completed', s.completed], ['Cancelled', s.cancelled], ['Volume', money(s.volume)], ['Platform fees', money(s.fees)], ['In escrow', money(s.escrow)],
+      ['Paid out', money(s.payouts)], ['Deliveries', s.deliveries], ['App rating', s.appRating + ' ★']];
+    $('view').innerHTML = `<h2>Dashboard</h2><div class="card"><div class="grid">${cards.map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${k}</span></div>`).join('')}</div></div>
+      <div class="card"><h3 style="margin-top:0">Bookings — last 14 days</h3>${s.daily.length ? `<div class="bars" style="margin-bottom:22px">${s.daily.map((d) => `<div style="height:${Math.max(3, d.c / max * 100)}%" title="${d.c} bookings, ${money(d.v)}"><span>${esc(d.d.slice(5))}</span></div>`).join('')}</div>` : '<p class="muted">No bookings yet.</p>'}</div>`;
+  },
+
+  async users() {
+    const g = (id, d) => ($(id) ? $(id).value : d);
+    const st = window._uq = Object.assign({ q: '', role: '', status: '', country: '', sort: 'newest', page: 1, per: 25 }, window._uq || {}, $('q') ? { q: g('q'), role: g('role'), status: g('ustatus'), country: g('ucountry'), sort: g('usort'), per: g('uper') } : {});
+    const qs = new URLSearchParams(st).toString();
+    const d = await api('GET', '/users?' + qs);
+    st.page = d.page;
+    const sm = d.summary, opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    const ago = (s) => { if (!s) return '—'; const m = Math.round((Date.now() - Date.parse(s.replace(' ', 'T') + 'Z')) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+    $('view').innerHTML = `<h2>Users</h2>
+      <div class="card"><div class="grid">${[['Total users', sm.total], ['Customers', sm.customers], ['Workers', sm.workers], ['Suspended', sm.suspended], ['New (7 days)', sm.newWeek]].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join('')}</div></div>
+      <div class="row"><input id="q" placeholder="Search name / phone / ID" value="${esc(st.q)}">
+        <select id="role">${opt([['', 'All roles'], ['customer', 'Customers'], ['worker', 'Workers']], st.role)}</select>
+        <select id="ustatus">${opt([['', 'Any status'], ['active', 'Active'], ['suspended', 'Suspended'], ['unverified', 'Unverified']], st.status)}</select>
+        <select id="ucountry">${opt([['', 'All countries']].concat(d.countries.map((c) => [c, c])), st.country)}</select>
+        <select id="usort">${opt([['newest', 'Newest'], ['oldest', 'Oldest'], ['name', 'Name A–Z'], ['spent', 'Top spenders'], ['bookings', 'Most bookings'], ['active', 'Recently active']], st.sort)}</select>
+        <select id="uper">${opt([['10', '10 / page'], ['25', '25 / page'], ['50', '50 / page'], ['100', '100 / page']], String(st.per))}</select>
+        <button class="sec" id="s">Search</button><button class="sec" id="ux">⬇ CSV</button></div>
+      <div class="card">${table(['ID', 'Name', 'Phone', 'Role', 'Location', 'Bookings', 'Spent', 'Last login', 'Status', 'Joined', ''], d.users.map((u) => [u.id, esc(u.name), esc(u.phone), u.role,
+        esc([u.district, u.region, u.country].filter(Boolean).join(', ') || '—'), u.bookings, money(u.spent), ago(u.last_login),
+        (u.banned ? tag('suspended', 'bad') : tag('active', 'good')) + (u.verified ? '' : ' ' + tag('unverified', 'warn')) + (u.w_status && u.w_status !== 'approved' ? ' ' + tag('worker ' + u.w_status, u.w_status === 'rejected' ? 'bad' : 'warn') : ''),
+        esc(u.created_at.slice(0, 10)),
+        `<button class="sm sec" data-v="${u.id}">View</button> <button class="sm ${u.banned ? 'sec' : 'red'}" data-ban="${u.id}" data-val="${u.banned ? 0 : 1}">${u.banned ? 'Restore' : 'Suspend'}</button>`]))}
+        <div class="row" style="margin:12px 0 0;justify-content:space-between"><span class="muted">${d.total} user${d.total === 1 ? '' : 's'} · page ${d.page} of ${d.pages}</span>
+          <span><button class="sm sec" id="pp"${d.page <= 1 ? ' disabled' : ''}>‹ Prev</button> <button class="sm sec" id="pn"${d.page >= d.pages ? ' disabled' : ''}>Next ›</button></span></div></div>`;
+    const reset = () => { window._uq.page = 1; act(VIEWS.users); };
+    $('s').onclick = reset;
+    for (const x of ['role', 'ustatus', 'ucountry', 'usort', 'uper']) $(x).onchange = reset;
+    $('q').onkeydown = (e) => { if (e.key === 'Enter') reset(); };
+    $('pp').onclick = () => { window._uq.page--; act(VIEWS.users); };
+    $('pn').onclick = () => { window._uq.page++; act(VIEWS.users); };
+    $('ux').onclick = () => act(async () => {
+      const r = await fetch('/api/admin/export/csv/users', { headers: { Authorization: 'Bearer ' + token } });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'users.csv'; document.body.appendChild(a); a.click(); a.remove();
+    });
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.ban) {
+        if (t.dataset.val === '1') { const reason = prompt('Reason for suspension (optional):'); if (reason === null) return; act(() => api('POST', `/users/${t.dataset.ban}/ban`, { banned: true, reason }), VIEWS.users); }
+        else act(() => api('POST', `/users/${t.dataset.ban}/ban`, { banned: false }), VIEWS.users);
+      }
+      if (t.dataset.v) act(() => userDetail(t.dataset.v));
+    };
+  },
+
+  async verifications() {
+    const st = $('vst') ? $('vst').value : 'pending';
+    const { items } = await api('GET', '/verifications?status=' + st);
+    const idl = { national_id: 'National ID', passport: 'Passport', driving_lic: 'Driving License', refugee_card: 'Refugee Card', no_id: 'No ID' };
+    $('view').innerHTML = `<h2>Worker verification</h2><div class="row"><select id="vst">${['pending', 'approved', 'rejected', 'all'].map((s) => `<option value="${s}"${s === st ? ' selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div class="card">${table(['ID', 'Name', 'Phone', 'Category', 'Location', 'ID type', 'ID number', 'Docs', 'Status', ''], items.map((w) => [w.id, esc(w.name), esc(w.phone), esc(w.cat),
+        esc([w.district, w.region, w.country].filter(Boolean).join(', ')), esc(idl[w.idType] || '—'), esc(w.idNumber || '—'),
+        `<button class="sm sec" data-d="${w.id}" data-n="${esc(w.name)}">${w.docs ? 'Review (' + w.docs + ')' : 'None'}</button>`,
+        tag(w.status, w.status === 'approved' ? 'good' : w.status === 'rejected' ? 'bad' : 'warn') + (w.note ? `<br><span class="muted">${esc(w.note)}</span>` : ''),
+        `<button class="sm" data-a="${w.id}">Approve</button> <button class="sm red" data-r="${w.id}">Reject</button>`]))}</div>`;
+    $('vst').onchange = () => act(VIEWS.verifications);
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.d) act(() => reviewDocs(t.dataset.d, t.dataset.n));
+      if (t.dataset.a && confirm('Approve this worker? They become visible to customers.')) act(() => api('POST', '/verifications/' + t.dataset.a, { status: 'approved' }), VIEWS.verifications);
+      if (t.dataset.r) { const note = prompt('Reason for rejection (shown to the worker):'); if (note) act(() => api('POST', '/verifications/' + t.dataset.r, { status: 'rejected', note }), VIEWS.verifications); }
+    };
+  },
+
+  async workers() {
+    const q = $('q') ? $('q').value : '';
+    const { workers } = await api('GET', '/workers?q=' + encodeURIComponent(q));
+    window._workers = workers;
+    $('view').innerHTML = `<h2>Workers</h2><div class="row"><input id="q" placeholder="Search name / category" value="${esc(q)}"><button class="sec" id="s">Search</button><button id="add">+ Add worker</button></div>
+      <div class="card">${table(['ID', 'Name', 'Phone', 'Category', 'Rating', 'Jobs', 'Price', 'Available $', 'Account', 'Status', ''], workers.map((w) => [w.id, esc(w.name), esc(w.phone || '—'), esc(w.cat), w.rating, w.jobs, esc(w.price + w.unit), money(w.available),
+        w.user_id ? tag('registered', 'good') : tag('catalogue'), (w.verification && w.verification !== 'approved' ? tag(w.verification, w.verification === 'rejected' ? 'bad' : 'warn') + ' ' : '') + (w.disabled ? tag('hidden', 'bad') : tag('shown', 'good')),
+        `<button class="sm sec" data-e="${w.id}">Edit</button> <button class="sm sec" data-h="${w.id}" data-val="${w.disabled ? 0 : 1}">${w.disabled ? 'Show' : 'Hide'}</button> <button class="sm red" data-d="${w.id}">Delete</button>`]))}</div>`;
+    $('s').onclick = () => act(VIEWS.workers);
+    $('q').onkeydown = (e) => { if (e.key === 'Enter') act(VIEWS.workers); };
+    $('add').onclick = () => workerForm();
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.e) workerForm(window._workers.find((w) => w.id == t.dataset.e));
+      if (t.dataset.h) act(() => api('POST', `/workers/${t.dataset.h}/hide`, { hidden: t.dataset.val === '1' }), VIEWS.workers);
+      if (t.dataset.d && confirm('Delete this worker permanently?')) act(() => api('DELETE', '/workers/' + t.dataset.d), VIEWS.workers);
+    };
+  },
+
+  async bookings() {
+    const st = $('st') ? $('st').value : '';
+    const { bookings } = await api('GET', '/bookings?status=' + st);
+    $('view').innerHTML = `<h2>Bookings</h2><div class="row"><select id="st"><option value="">All statuses</option><option>confirmed</option><option>completed</option><option>cancelled</option></select></div>
+      <div class="card">${table(['ID', 'Customer', 'Worker', 'Service', 'When', 'Amount', 'Pay', 'Status', ''], bookings.map((b) => [b.id, esc(b.c_name + ' ' + b.customer), esc(b.w_name), esc(b.svc), esc(b.date + ' ' + b.time), money(b.amount), esc(b.pay), tag(b.status, stCls(b.status)),
+        b.status === 'confirmed' ? `<button class="sm" data-c="${b.id}">Complete</button> <button class="sm red" data-x="${b.id}">Cancel</button>` : '']))}</div>`;
+    $('st').value = st;
+    $('st').onchange = () => act(VIEWS.bookings);
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.c && confirm('Mark completed and release escrow to the worker?')) act(() => api('POST', `/bookings/${t.dataset.c}/complete`), VIEWS.bookings);
+      if (t.dataset.x && confirm('Cancel booking and refund escrow?')) act(() => api('POST', `/bookings/${t.dataset.x}/cancel`), VIEWS.bookings);
+    };
+  },
+
+  async payments() {
+    const ty = $('ty') ? $('ty').value : '';
+    const { txns } = await api('GET', '/payments?type=' + ty);
+    $('view').innerHTML = `<h2>Payments</h2><div class="row"><select id="ty"><option value="">All</option><option value="earning">Earnings</option><option value="escrow">Escrow</option><option value="payout">Payouts</option></select></div>
+      <div class="card">${table(['ID', 'Worker', 'Booking', 'Label', 'Gross', 'Fee', 'Net', 'Type', 'Date'], txns.map((t) => [t.id, esc(t.worker), t.booking_id || '', esc(t.label), money(t.gross), money(t.fee), money(t.net),
+        t.type === 'out' ? tag('payout', 'warn') : t.escrow ? tag('escrow', 'warn') : tag('earning', 'good'), esc(t.created_at)]))}</div>`;
+    $('ty').value = ty;
+    $('ty').onchange = () => act(VIEWS.payments);
+  },
+
+  async messages() {
+    const { conversations } = await api('GET', '/conversations');
+    $('view').innerHTML = `<h2>Messages</h2><div class="card">${table(['Customer', 'Worker', 'Messages', 'Last message', 'When', ''], conversations.map((c) => [esc(c.customer + ' ' + c.phone), esc(c.worker), c.count, esc(c.last_text), esc(c.last_at),
+      `<button class="sm sec" data-c="${c.customer_id}" data-w="${c.worker_id}">Open</button>`]))}</div>`;
+    $('view').onclick = (e) => { if (e.target.dataset.c) act(() => thread(e.target.dataset.c, e.target.dataset.w)); };
+  },
+
+  async deliveries() {
+    const { deliveries, statuses } = await api('GET', '/deliveries');
+    $('view').innerHTML = `<h2>Deliveries</h2><div class="card">${table(['Track ID', 'Customer', 'Pickup', 'Drop-off', 'Fare', 'Status', 'Created'], deliveries.map((d) => [esc(d.trackId), esc(d.customer), esc(d.pickup), esc(d.dropoff), money(d.fare),
+      `<select data-t="${esc(d.trackId)}">${statuses.map((s) => `<option${s === d.status ? ' selected' : ''}>${s}</option>`).join('')}</select>`, esc(d.created_at)]))}</div>`;
+    $('view').onchange = (e) => { if (e.target.dataset.t) act(() => api('PATCH', '/deliveries/' + e.target.dataset.t, { status: e.target.value })); };
+  },
+
+  async ratings() {
+    const r = await api('GET', '/ratings');
+    const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+    $('view').innerHTML = `<h2>Ratings</h2><div class="card"><h3 style="margin-top:0">Worker reviews</h3>${table(['Worker', 'Customer', 'Stars', 'Comment', 'Date'], r.workerRatings.map((x) => [esc(x.worker), esc(x.customer), stars(x.stars), esc(x.comment), esc(x.created_at)]))}</div>
+      <div class="card"><h3 style="margin-top:0">App reviews</h3>${table(['User', 'Stars', 'Comment', 'Date', ''], r.appRatings.map((x) => [esc(x.user), stars(x.stars), esc(x.comment), esc(x.created_at), `<button class="sm red" data-d="${x.id}">Delete</button>`]))}</div>`;
+    $('view').onclick = (e) => { if (e.target.dataset.d && confirm('Delete this review?')) act(() => api('DELETE', '/app-ratings/' + e.target.dataset.d), VIEWS.ratings); };
+  },
+
+  async settings() {
+    const s = await api('GET', '/settings');
+    $('view').innerHTML = `<h2>Settings</h2>
+      <div class="card"><h3 style="margin-top:0">OTP / SMS</h3><div class="row"><label><input type="checkbox" id="tm"${s.otpTestMode ? ' checked' : ''}> Test mode (no SMS; fixed code)</label>
+        <input id="tc" maxlength="4" size="6" value="${esc(s.otpTestCode)}"></div><p class="muted">With test mode on, every login code equals the test code. Turn it off in production after connecting an SMS gateway.</p></div>
+      <div class="card"><h3 style="margin-top:0">Payments</h3><div class="row"><label>Platform fee % <input id="fee" type="number" min="0" max="50" step="0.5" value="${s.platformFeePct}" style="width:90px"></label>
+        <label>Minimum withdrawal $ <input id="mw" type="number" min="0" value="${s.minWithdraw}" style="width:90px"></label></div></div>
+      <div class="card"><h3 style="margin-top:0">Service</h3><label><input type="checkbox" id="mt"${s.maintenance ? ' checked' : ''}> Maintenance mode (blocks new bookings)</label></div>
+      <button id="save">Save settings</button> <span id="smsg" class="muted"></span>
+      <div class="card" style="margin-top:18px"><h3 style="margin-top:0">Admin password</h3><div class="row"><input id="pc" type="password" placeholder="Current password"><input id="pn" type="password" placeholder="New password (min 6)"><button id="pw">Change</button>      <span id="pmsg" class="muted"></span></div></div>`;
+    $('save').onclick = () => act(async () => {
+      await api('PUT', '/settings', { otpTestMode: $('tm').checked, otpTestCode: $('tc').value, platformFeePct: $('fee').value, minWithdraw: $('mw').value, maintenance: $('mt').checked });
+      $('smsg').textContent = 'Saved ✓'; $('smsg').className = 'ok';
+    });
+    $('pw').onclick = () => act(async () => { await api('POST', '/password', { current: $('pc').value, next: $('pn').value }); $('pmsg').textContent = 'Password changed ✓'; $('pc').value = $('pn').value = ''; });
+  },
+
+  async backup() {
+    const [b, info] = await Promise.all([api('GET', '/backups'), api('GET', '/db-info')]);
+    const s = b.settings, kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+    const last = b.backups[0];
+    $('view').innerHTML = `<h2>Backup &amp; Export</h2>
+      <div class="card"><h3 style="margin-top:0">Database</h3>
+        <div class="grid"><div class="stat"><b>${kb(info.bytes)}</b><span>Database size</span></div><div class="stat"><b>${info.integrity === 'ok' ? '✓ OK' : esc(info.integrity)}</b><span>Integrity</span></div>
+        <div class="stat"><b>${info.uploads.files}</b><span>Uploaded documents (${kb(info.uploads.bytes)})</span></div><div class="stat"><b>${b.backups.length}</b><span>Backups${last ? ' · last ' + esc(last.created.slice(0, 16).replace('T', ' ')) : ''}</span></div></div>
+        <p class="muted" style="margin-bottom:0">${esc(info.file)}</p></div>
+      <div class="card"><h3 style="margin-top:0">Backup</h3><div class="row"><button id="bk">⬇ Backup now (one click)</button><button class="sec" id="dl">Download live database (.db)</button></div>
+        <p class="muted">A backup copies the database and the uploaded documents. Files are kept in <code>${esc(b.dir)}</code>.</p>
+        <div class="row"><label><input type="checkbox" id="ba"${s.autoEnabled ? ' checked' : ''}> Automatic backup every</label><input id="bh" type="number" min="1" max="720" value="${s.everyHours}" style="width:80px"><span>hours, keep last</span><input id="bn" type="number" min="1" max="365" value="${s.keep}" style="width:80px"><span>automatic backups</span><button class="sec" id="bs">Save</button></div></div>
+      <div class="card"><h3 style="margin-top:0">Saved backups</h3>${table(['File', 'Type', 'Created', 'Size', 'Docs', ''], b.backups.map((x) => [esc(x.name), tag(x.kind, x.kind === 'auto' ? '' : x.kind === 'prerestore' ? 'warn' : 'good'), esc(x.created.slice(0, 19).replace('T', ' ')), kb(x.size), x.uploads,
+        `<button class="sm sec" data-dl="${esc(x.name)}">Download</button> <button class="sm" data-rs="${esc(x.name)}">Restore</button> <button class="sm red" data-rm="${esc(x.name)}">Delete</button>`]))}</div>
+      <div class="card"><h3 style="margin-top:0">Export data</h3><div class="row"><button class="sec" id="ej">Export everything (JSON)</button></div>
+        <p class="muted">Export a single table as CSV (opens in Excel). Passwords, tokens and provider/payment credentials are never included.</p>
+        <div class="row">${info.tables.map((t) => `<button class="sm sec" data-csv="${t.name}">${t.name} (${t.rows})</button>`).join('')}</div></div>`;
+    const dl = (path, name) => act(async () => {
+      const r = await fetch('/api/admin' + path, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Download failed');
+      const cd = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = cd ? cd[1] : name; document.body.appendChild(a); a.click(); a.remove();
+    });
+    $('bk').onclick = () => act(() => api('POST', '/backups'), VIEWS.backup);
+    $('dl').onclick = () => dl('/export/db', 'database.db');
+    $('ej').onclick = () => dl('/export/json', 'export.json');
+    $('bs').onclick = () => act(() => api('PUT', '/backup-settings', { autoEnabled: $('ba').checked, everyHours: $('bh').value, keep: $('bn').value }), VIEWS.backup);
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.csv) dl('/export/csv/' + t.dataset.csv, t.dataset.csv + '.csv');
+      if (t.dataset.dl) dl('/backups/' + encodeURIComponent(t.dataset.dl) + '/download', t.dataset.dl);
+      if (t.dataset.rm && confirm('Delete this backup permanently?')) act(() => api('DELETE', '/backups/' + encodeURIComponent(t.dataset.rm)), VIEWS.backup);
+      if (t.dataset.rs) {
+        if (prompt('Restore replaces ALL current data with this backup.\nA safety backup of the current data is made first.\nType RESTORE to continue:') !== 'RESTORE') return;
+        act(async () => { const r = await api('POST', '/backups/' + encodeURIComponent(t.dataset.rs) + '/restore', { confirm: 'RESTORE' }); alert('Restored. Safety copy of previous data: ' + r.safety); }, VIEWS.backup);
+      }
+    };
+  },
+
+  async providers() {
+    const d = await api('GET', '/providers');
+    const kinds = [['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email']];
+    const fld = (f, v) => `<label style="display:block;margin:8px 0">${esc(f.label)}<br><input data-k="${f.key}" value="${esc(v || '')}" placeholder="${esc(f.placeholder || (f.secret ? 'secret — leave blank to keep' : ''))}" style="width:100%"></label>`;
+    $('view').innerHTML = `<h2>Providers</h2><p class="muted">Configure how OTP codes and notifications are delivered. Providers are tried in priority order (1 first). Credentials are stored encrypted.</p>
+      <div class="card"><h3 style="margin-top:0">OTP delivery</h3><div class="row">${kinds.map(([k, l]) => `<label><input type="checkbox" class="ch" value="${k}"${d.otpChannels.includes(k) ? ' checked' : ''}> ${l}</label>`).join('')}</div>
+        <label style="display:block;margin:8px 0">Message template (use {{code}})<br><input id="tpl" value="${esc(d.otpTemplate)}" style="width:100%"></label>
+        <button id="od">Save OTP delivery</button> <span class="muted">Ignored while OTP test mode is on (Settings).</span></div>
+      ${kinds.map(([k, l]) => `<div class="card"><h3 style="margin-top:0">${l} providers <button class="sec" data-add="${k}">+ Add</button></h3>
+        ${table(['Name', 'Type', 'Priority', 'Status', ''], d.providers.filter((p) => p.kind === k).map((p) => [esc(p.name), esc(d.types[k][p.type] ? d.types[k][p.type].label : p.type), p.priority,
+          tag(p.enabled ? 'enabled' : 'disabled', p.enabled ? 'good' : 'bad'), `<button class="sec" data-e="${p.id}">Edit</button> <button class="sec" data-t="${p.id}">Test</button> <button class="sec" data-d="${p.id}">Delete</button>`]))}</div>`).join('')}`;
+    $('od').onclick = () => act(() => api('PUT', '/otp-delivery', { channels: [...document.querySelectorAll('.ch:checked')].map((c) => c.value), template: $('tpl').value }).then(() => alert('Saved')));
+    const form = (kind, p) => {
+      const types = d.types[kind];
+      const cur = p ? p.type : Object.keys(types)[0];
+      const draw = (t) => {
+        const cfg = p && p.type === t ? p.config : {};
+        $('pf').innerHTML = types[t].fields.map((f) => fld(f, cfg[f.key])).join('');
+      };
+      modal(`<h3 style="margin-top:0">${p ? 'Edit' : 'Add'} ${kind} provider</h3>
+        <label>Type <select id="pt"${p ? ' disabled' : ''}>${Object.entries(types).map(([t, v]) => `<option value="${t}"${t === cur ? ' selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
+        <label style="display:block;margin:8px 0">Name<br><input id="pn2" value="${esc(p ? p.name : '')}" style="width:100%"></label>
+        <div class="row"><label>Priority <input id="pp" type="number" min="1" max="99" value="${p ? p.priority : 1}" style="width:70px"></label><label><input type="checkbox" id="pe"${!p || p.enabled ? ' checked' : ''}> Enabled</label></div><div id="pf"></div>`, async () => {
+        const config = {};
+        $('pf').querySelectorAll('input').forEach((i) => config[i.dataset.k] = i.value);
+        const body = { name: $('pn2').value, priority: $('pp').value, enabled: $('pe').checked, config };
+        if (p) await api('PUT', '/providers/' + p.id, body); else await api('POST', '/providers', Object.assign(body, { kind, type: $('pt').value }));
+      });
+      draw(cur);
+      $('pt').onchange = () => draw($('pt').value);
+    };
+    $('view').onclick = (e) => {
+      const t = e.target;
+      if (t.dataset.add) form(t.dataset.add);
+      if (t.dataset.e) { const p = d.providers.find((x) => x.id == t.dataset.e); form(p.kind, p); }
+      if (t.dataset.d && confirm('Delete this provider?')) act(() => api('DELETE', '/providers/' + t.dataset.d), VIEWS.providers);
+      if (t.dataset.t) { const to = prompt('Send a test message to (phone like +252… or email):'); if (to) act(async () => { const r = await api('POST', `/providers/${t.dataset.t}/test`, { to }); alert(r.ok ? 'Sent ✓' : 'Failed: ' + r.error); }, VIEWS.providers); }
+    };
+  },
+
+  async methods() {
+    const d = await api('GET', '/payment-methods');
+    $('view').innerHTML = `<h2>Payment methods</h2><p class="muted">Enable or disable methods, set limits and fees, and store each provider's API credentials (encrypted).</p>
+      <div class="card">${table(['Method', 'Countries', 'Status', 'Payouts', 'Limits', 'Fee %', 'API', ''], d.methods.map((m) => [`<b>${esc(m.name)}</b><br>      <span class="muted">${esc(m.sub)}</span>`, m.countries.length ? esc(m.countries.join(', ')) : 'All',
+        tag(m.enabled ? 'enabled' : 'disabled', m.enabled ? 'good' : 'bad'), m.payouts ? 'Yes' : 'No', `${money(m.min)} – ${m.max ? money(m.max) : '∞'}`, m.feePct,
+        m.config.apiBase ? tag('configured', 'good') : tag('not set', 'warn'), `<button class="sec" data-e="${esc(m.code)}">Configure</button>`]))}</div>`;
+    $('view').onclick = (e) => {
+      const m = d.methods.find((x) => x.code === e.target.dataset.e);
+      if (!m) return;
+      modal(`<h3 style="margin-top:0">${esc(m.name)}</h3>
+        <div class="row"><label><input type="checkbox" id="me"${m.enabled ? ' checked' : ''}> Enabled</label><label><input type="checkbox" id="mp"${m.payouts ? ' checked' : ''}> Allow worker payouts</label></div>
+        <div class="row"><label>Min $ <input id="mmin" type="number" min="0" value="${m.min}" style="width:80px"></label><label>Max $ (0 = none) <input id="mmax" type="number" min="0" value="${m.max}" style="width:80px"></label><label>Fee % <input id="mfee" type="number" min="0" max="50" step="0.1" value="${m.feePct}" style="width:70px"></label></div>
+        <h4>Available in countries <span class="muted">(none ticked = everywhere)</span></h4><div class="row">${d.countries.map((c) => `<label><input type="checkbox" data-c="${c}"${m.countries.includes(c) ? ' checked' : ''}> ${c}</label>`).join('')}</div>
+        <label style="display:block;margin:8px 0">Customer instructions<br><input id="mi" value="${esc(m.instructions)}" style="width:100%"></label>
+        <h4>API credentials</h4>${d.fields.map((f) => `<label style="display:block;margin:8px 0">${esc(f.label)}<br><input data-k="${f.key}" value="${esc(m.config[f.key] || '')}" placeholder="${esc(f.placeholder || '')}" style="width:100%"></label>`).join('')}
+        <button class="sec" id="mt2">Test connection</button> <span id="mtr" class="muted"></span>`, async () => {
+        const config = {};
+        $('modal').querySelectorAll('input[data-k]').forEach((i) => config[i.dataset.k] = i.value);
+        await api('PUT', '/payment-methods/' + m.code, { enabled: $('me').checked, payouts: $('mp').checked, min: $('mmin').value, max: $('mmax').value, feePct: $('mfee').value, instructions: $('mi').value, config, countries: [...$('modal').querySelectorAll('input[data-c]:checked')].map((i) => i.dataset.c) });
+      });
+      $('mt2').onclick = () => act(async () => {
+        const r = await api('POST', `/payment-methods/${m.code}/test`);
+        $('mtr').textContent = r.ok ? `Reachable (HTTP ${r.status}, ${r.ms} ms) — save first if you changed the URL` : 'Failed: ' + r.error;
+      });
+    };
+  },
+
+  async commissions() {
+    const d = await api('GET', '/commissions');
+    $('view').innerHTML = `<h2>Commissions</h2><p class="muted">Fee charged to workers per booking. Priority: worker rule → category rule → default.</p>
+      <div class="card"><h3 style="margin-top:0">Default</h3><div class="row"><label>Percent % <input id="cp" type="number" min="0" max="50" step="0.1" value="${d.defaults.pct}" style="width:80px"></label>
+        <label>Flat $ <input id="cf" type="number" min="0" step="0.1" value="${d.defaults.flat}" style="width:80px"></label><label>Minimum fee $ <input id="cm" type="number" min="0" step="0.1" value="${d.defaults.minFee}" style="width:80px"></label>
+        <button id="cs">Save default</button></div></div>
+      <div class="card"><h3 style="margin-top:0">Rules <button class="sec" id="ca">+ Add rule</button></h3>${table(['Scope', 'Target', '%', 'Flat', 'Min', 'Active', 'Note', ''],
+        d.rules.map((r) => [r.scope, esc(r.target), r.pct, r.flat, r.minFee, r.active ? 'Yes' : 'No', esc(r.note), `<button class="sec" data-d="${r.id}">Delete</button>`]))}</div>
+      <div class="card"><h3 style="margin-top:0">Preview</h3><div class="row"><input id="pa" type="number" placeholder="Amount $" style="width:100px"><input id="pc2" placeholder="Category (optional)"><input id="pw2" type="number" placeholder="Worker ID (optional)" style="width:130px"><button class="sec" id="pv">Calculate</button><span id="pr" class="muted"></span></div></div>`;
+    $('cs').onclick = () => act(() => api('PUT', '/commissions/defaults', { pct: $('cp').value, flat: $('cf').value, minFee: $('cm').value }).then(() => alert('Saved')));
+    $('ca').onclick = () => modal(`<h3 style="margin-top:0">Commission rule</h3><div class="row"><select id="rs"><option value="category">Category</option><option value="worker">Worker ID</option></select><input id="rt" placeholder="Category name or worker ID"></div>
+      <div class="row"><label>% <input id="rp" type="number" min="0" max="50" step="0.1" value="0" style="width:80px"></label><label>Flat $ <input id="rf" type="number" min="0" step="0.1" value="0" style="width:80px"></label><label>Min $ <input id="rm" type="number" min="0" step="0.1" value="0" style="width:80px"></label></div>
+      <input id="rn" placeholder="Note" style="width:100%">`, () => api('POST', '/commissions/rules', { scope: $('rs').value, target: $('rt').value, pct: $('rp').value, flat: $('rf').value, minFee: $('rm').value, note: $('rn').value }));
+    $('view').onclick = (e) => { if (e.target.dataset.d && confirm('Delete rule?')) act(() => api('DELETE', '/commissions/rules/' + e.target.dataset.d), VIEWS.commissions); };
+    $('pv').onclick = () => act(async () => {
+      const r = await api('POST', '/commissions/preview', { amount: $('pa').value, cat: $('pc2').value, workerId: $('pw2').value });
+      $('pr').textContent = `Fee ${money(r.fee)} · worker gets ${money(r.net)} · rule: ${r.rule}`;
+    });
+  },
+
+  async notifications() {
+    const { log } = await api('GET', '/notifications');
+    $('view').innerHTML = `<h2>Notification log</h2><div class="card">${table(['When', 'Channel', 'Provider', 'To', 'Status', 'Error'], log.map((l) => [esc(l.created_at), esc(l.kind), esc(l.provider), esc(l.to_addr),
+      tag(l.status, l.status === 'sent' ? 'good' : l.status === 'failed' ? 'bad' : 'warn'), esc(l.error)]))}</div>`;
+  },
+
+  async app() {
+    const s = await api('GET', '/app-settings');
+    const f = (k, l) => `<label style="display:block;margin:8px 0">${l}<br><input id="a-${k}" value="${esc(s[k])}" style="width:100%;max-width:420px"></label>`;
+    $('view').innerHTML = `<h2>App settings</h2><div class="card">${f('appName', 'App name')}${f('supportPhone', 'Support phone')}${f('supportEmail', 'Support email')}${f('supportWhatsapp', 'Support WhatsApp')}${f('announcement', 'Announcement (shown to app users)')}
+      <button id="as">Save</button> <span id="am" class="muted"></span></div>`;
+    $('as').onclick = () => act(async () => {
+      await api('PUT', '/app-settings', Object.fromEntries(['appName', 'supportPhone', 'supportEmail', 'supportWhatsapp', 'announcement'].map((k) => [k, $('a-' + k).value])));
+      $('am').textContent = 'Saved ✓'; $('am').className = 'ok';
+    });
+  },
+
+  async audit() {
+    const { log } = await api('GET', '/audit');
+    $('view').innerHTML = `<h2>Audit log</h2><div class="card">${table(['When', 'Action', 'Detail', 'IP'], log.map((l) => [esc(l.created_at), esc(l.action), esc(l.detail), esc(l.ip)]))}</div>`;
+  },
+};
+
+async function reviewDocs(wid, name) {
+  const { documents } = await api('GET', `/workers/${wid}/documents`);
+  const items = await Promise.all(documents.map(async (d) => {
+    const f = await api('GET', `/documents/${d.id}/file`);
+    const url = URL.createObjectURL(await (await fetch(f.data)).blob());
+    return { d, url };
+  }));
+  const col = (s) => (s === 'approved' ? 'good' : s === 'rejected' ? 'bad' : 'warn');
+  $('modal').innerHTML = `<div class="modal"><div class="card" style="width:min(760px,94vw)"><h3 style="margin-top:0">Documents - ${esc(name)} <span class="muted">#${wid}</span></h3>
+    ${items.length ? items.map(({ d, url }) => `<div style="border-bottom:1px solid #1F2937;padding:12px 0"><div class="row" style="margin:0 0 8px"><b>${esc(d.label)}</b> ${tag(d.status, col(d.status))} <span class="muted">${Math.round(d.size / 1024)} KB - ${esc(d.created)}</span></div>
+      ${d.mime === 'application/pdf' ? `<a href="${url}" target="_blank" rel="noopener"><button class="sm sec">Open PDF</button></a>` : `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="max-width:100%;max-height:340px;border-radius:8px"></a>`}
+      ${d.note ? `<p class="muted">Reason: ${esc(d.note)}</p>` : ''}
+      <div class="row" style="margin:8px 0 0"><button class="sm" data-da="${d.id}">Accept</button> <button class="sm red" data-dr="${d.id}">Reject</button></div></div>`).join('') : '<p class="muted">This worker has not uploaded any documents.</p>'}
+    <div class="row" style="margin:14px 0 0"><button class="sec" id="m-x">Close</button></div></div></div>`;
+  const close = () => { items.forEach((i) => URL.revokeObjectURL(i.url)); $('modal').innerHTML = ''; };
+  $('m-x').onclick = () => { close(); act(VIEWS.verifications); };
+  $('modal').onclick = (e) => {
+    const t = e.target;
+    if (t.dataset.da) act(() => api('POST', `/documents/${t.dataset.da}/review`, { status: 'approved' }), () => reviewDocs(wid, name));
+    if (t.dataset.dr) { const note = prompt('Reason for rejection (shown to the worker):'); if (note) act(() => api('POST', `/documents/${t.dataset.dr}/review`, { status: 'rejected', note }), () => reviewDocs(wid, name)); }
+  };
+}
+
+async function userDetail(uid) {
+  const d = await api('GET', '/users/' + uid);
+  const u = d.user, p = u.profile || {}, w = d.worker;
+  const dst = { approved: 'good', rejected: 'bad' };
+  modal(`<h3 style="margin-top:0">${esc(u.name)} <span class="muted">#${u.id} · ${esc(u.role)}</span> ${u.banned ? tag('suspended', 'bad') : tag('active', 'good')}</h3>
+    <p class="muted">Joined ${esc(u.created_at)} · last login ${esc(u.last_login || 'never')} · ${d.sessions} active session${d.sessions === 1 ? '' : 's'}${u.banned && u.ban_reason ? ' · reason: ' + esc(u.ban_reason) : ''}</p>
+    <div class="grid"><div class="stat"><b>${u.bookings}</b><span>Bookings</span></div><div class="stat"><b>${money(u.spent)}</b><span>Spent</span></div><div class="stat"><b>${d.deliveries}</b><span>Deliveries</span></div>
+      ${d.wallet ? `<div class="stat"><b>${money(d.wallet.earned - d.wallet.paidOut)}</b><span>Wallet available</span></div>` : ''}</div>
+    <label>Name</label><input id="un" value="${esc(u.name)}">
+    <label>Phone</label><input id="up" value="${esc(u.phone)}">
+    <label>Country</label><input id="uc" value="${esc(p.country || '')}"><label>Region</label><input id="ur" value="${esc(p.region || '')}"><label>District</label><input id="ud" value="${esc(p.district || '')}">
+    <label><input type="checkbox" id="uv"${u.verified ? ' checked' : ''}> Phone verified</label>
+    ${w ? `<h4>Worker profile</h4><p class="muted">#${w.id} · ${esc(w.cat)} · ${w.rating}★ · ${w.jobs} jobs · ${esc(w.price + w.unit)} · verification: ${esc(w.verification)}${w.disabled ? ' · hidden' : ''}</p>
+      ${d.wallet ? `<p class="muted">Earned ${money(d.wallet.earned)} · in escrow ${money(d.wallet.escrow)} · paid out ${money(d.wallet.paidOut)}</p>` : ''}` : ''}
+    ${d.documents.length ? `<h4>Documents</h4><p>${d.documents.map((x) => tag(x.kind.replace('_', ' ') + ': ' + x.status, dst[x.status] || 'warn')).join(' ')}</p>` : ''}
+    <p><button class="sm sec" id="fl">Force logout</button> <button class="sm red" id="del">Delete account</button></p>
+    <h4>Bookings</h4>${table(['ID', 'Worker', 'Service', 'Amount', 'Pay', 'Status', 'Date'], d.bookings.map((b) => [b.id, esc(b.w_name), esc(b.svc), money(b.amount), esc(b.pay), tag(b.status, stCls(b.status)), esc(b.created_at.slice(0, 10))]))}
+    ${d.reviews.length ? `<h4>Recent reviews</h4>${table(['Stars', 'Comment', 'Date'], d.reviews.map((r) => ['★'.repeat(r.stars), esc(r.comment), esc(r.created_at.slice(0, 10))]))}` : ''}
+    ${d.history.length ? `<h4>Admin history</h4>${table(['Action', 'Detail', 'When'], d.history.map((h) => [esc(h.action), esc(h.detail), esc(h.created_at)]))}` : ''}`,
+  () => api('PUT', '/users/' + uid, { name: $('un').value, phone: $('up').value, country: $('uc').value, region: $('ur').value, district: $('ud').value, verified: $('uv').checked }));
+  $('fl').onclick = () => act(() => api('POST', `/users/${uid}/logout`), () => alert('User logged out'));
+  $('del').onclick = () => {
+    if (prompt('Permanently erase this user\'s personal data (name, phone, documents, messages)? Bookings and payments are kept for accounting.\nType DELETE to confirm:') !== 'DELETE') return;
+    act(() => api('DELETE', '/users/' + uid), () => { $('modal').innerHTML = ''; reload(); });
+  };
+}
+
+function workerForm(w) {
+  w = w || { name: '', cat: '', sub: '', price: 0, unit: '/hr', online: 1 };
+  modal(`<h3 style="margin-top:0">${w.id ? 'Edit worker #' + w.id : 'Add worker'}</h3>
+    <label>Name</label><input id="wn" value="${esc(w.name)}"><label>Category</label><input id="wc" value="${esc(w.cat)}">
+    <label>Subcategory</label><input id="ws" value="${esc(w.sub)}"><label>Price</label><input id="wp" type="number" min="0" value="${w.price}">
+    <label>Unit</label><input id="wu" value="${esc(w.unit)}"><label>Online</label><select id="wo"><option value="1">Online</option><option value="0">Offline</option></select>`,
+  () => api(w.id ? 'PUT' : 'POST', w.id ? '/workers/' + w.id : '/workers', { name: $('wn').value, cat: $('wc').value, sub: $('ws').value, price: $('wp').value, unit: $('wu').value, online: $('wo').value === '1' }));
+  $('wo').value = w.online ? '1' : '0';
+}
+
+async function thread(cid, wid) {
+  const { messages } = await api('GET', `/messages?customerId=${cid}&workerId=${wid}`);
+  modal(`<h3 style="margin-top:0">Conversation</h3>${messages.map((m) => `<div class="bubble ${m.sender}"><small class="muted">${m.sender} · ${esc(m.created_at)}</small><br>${esc(m.text)}
+    <button class="sm red" data-dm="${m.id}" style="float:right">×</button></div>`).join('') || '<p class="muted">Empty.</p>'}`);
+  $('modal').onclick = (e) => { if (e.target.dataset.dm && confirm('Delete message?')) act(() => api('DELETE', '/messages/' + e.target.dataset.dm), () => thread(cid, wid)); };
+}
+
+if (token) showApp(); else showLogin();
+</script>
+</body>
+</html>
